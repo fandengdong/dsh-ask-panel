@@ -1,0 +1,53 @@
+{
+  "name": "dsh-ask-panel",
+  "version": "0.3.0",
+  "private": false,
+  "description": "Claude Code-style side-question panel for dsh: answers from the current context, read-only tools, create-only writes, streamed into the right column",
+  "type": "module",
+  "exports": {
+    ".": "./host.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-commands",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-renderer"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-api-remotes": "*",
+    "@deepseek-ai/dsh-commands": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-system-prompt": "*",
+    "@deepseek-ai/dsh-timeout": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "side-question",
+    "ask-panel"
+  ],
+  "files": [
+    "host.js",
+    "implementation.js",
+    "client.js",
+    "patch-layout.js",
+    "package.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

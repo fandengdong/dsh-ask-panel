@@ -1,0 +1,25 @@
+# dsh profile patch layer — `/ask`.
+#
+# Registers the local dsh-ask-panel plugin. The relative `name` is anchored
+# beside this patch file (`dsh-app-boot` converts it to a file URL), and the
+# plugin sits in `./plugins/ask-panel/` so its `@deepseek-ai/*` imports
+# resolve through the profile's own node_modules.
+#
+# The name below is substituted by install.sh with an absolute path to the
+# content-addressed host entry (`host.<sha1-10>.js`). The Loader imports a row by
+# URL and Node
+# caches ES modules by URL for the process lifetime, so a fixed filename would
+# keep executing whatever it imported first; hashing the content makes every
+# real edit a new URL instead. It also changes the row's specifier, which is
+# what the client-module scan keys its own per-process cache on.
+#
+# Installed by my_workspace/dsh-ask-panel/install.sh. A profile declared
+# `patchReload: live` (the web profile is) applies this without a restart.
+- insert:
+    - id: ask-panel
+      # Whole value is the placeholder: install.sh substitutes an absolute path.
+      name: __HOST__
+      # The plugin's own default is `false`; this install wants the persisted
+      # right-column width, so it opts in here.
+      config:
+        layoutWidth: true

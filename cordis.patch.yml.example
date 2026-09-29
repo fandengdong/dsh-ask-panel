@@ -1,0 +1,11 @@
+# Registration for a dsh profile (or the HOME-level $DSH_HOME/cordis.patch.yml,
+# which every profile inherits). Replace the name with how you installed it:
+#   * a registry or git dependency -> the bare package name
+#   * a local directory            -> the absolute path of host.js
+- insert:
+    - id: ask-panel
+      name: dsh-ask-panel
+      # Optional: persist the right column's width by patching the installed
+      # dsh-client-ui-layout bundle. OFF unless you ask for it — see the README.
+      config:
+        layoutWidth: false
