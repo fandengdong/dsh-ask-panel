@@ -9,7 +9,7 @@
  * through the profile's node_modules)
  */
 import assert from 'node:assert/strict';
-import { readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,6 +21,14 @@ const PLUGIN_DIR = process.env.DSH_ASK_PANEL_DIR ?? join(
     'plugins',
     'ask-panel',
 );
+
+if (!existsSync(PLUGIN_DIR)) {
+    console.error(`no installed plugin at ${PLUGIN_DIR}\n`
+        + 'install it first (bash install.sh, or dsh plugin add), or point '
+        + 'DSH_ASK_PANEL_DIR at the installed directory.');
+    process.exit(1);
+}
+
 const HOST_FILE = readdirSync(PLUGIN_DIR).find((entry) => /^host\..+\.js$/.test(entry));
 assert.ok(HOST_FILE, `no content-addressed host entry in ${PLUGIN_DIR}`);
 const INSTALLED = `${PLUGIN_DIR}/${HOST_FILE}`;

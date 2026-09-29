@@ -10,9 +10,23 @@
  * Run: node my_workspace/dsh-ask-panel/test-client.mjs
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+const PLUGIN_DIR = process.env.DSH_ASK_PANEL_DIR ?? join(
+    process.env.DSH_HOME ?? join(homedir(), '.dsh'),
+    'profiles',
+    process.env.DSH_PROFILE ?? 'web',
+    'plugins',
+    'ask-panel',
+);
+
+if (!existsSync(PLUGIN_DIR)) {
+    console.error(`no installed plugin at ${PLUGIN_DIR}`);
+    console.error('install it first (bash install.sh, or dsh plugin add), or set DSH_ASK_PANEL_DIR.');
+    process.exit(1);
+}
 
 const INSTALLED = join(PLUGIN_DIR, 'client.js');
 
