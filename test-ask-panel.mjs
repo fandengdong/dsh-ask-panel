@@ -364,8 +364,10 @@ const HISTORY = [
     // ...but a non-read-only call is refused, never executed
     assert.equal(captured.toolCalls.length, 0);
     const refusal = captured.requests[1].messages.at(-1);
-    assert.equal(refusal.content[0].type, 'tool-result');
-    assert.match(refusal.content[0].content[0].text, /不可用/);
+    // 0.1.7 passes raw result blocks through where 0.1.6 wrapped them, so assert
+    // the outcome (a tool-role message carrying the refusal) and not the wrapper.
+    assert.equal(refusal.role, 'tool');
+    assert.match(refusal.content[0].text, /不可用/);
     console.log('ok 19 full tool list, non-read-only call refused');
 }
 
@@ -391,8 +393,8 @@ const HISTORY = [
     // the assistant turn carries its preamble text AND the tool call, in order
     assert.deepEqual(second.at(-2).content.map((block) => block.type), ['text', 'tool-call']);
     assert.equal(second.at(-2).content.at(-1).id, 'call-1');
-    assert.equal(second.at(-1).content[0].type, 'tool-result');
-    assert.equal(second.at(-1).content[0].toolCallId, 'call-1');
+    assert.equal(second.at(-1).role, 'tool');
+    assert.equal(second.at(-1).toolCallId, 'call-1');
     // ...and none of it entered the agent's inbox
     assert.deepEqual(captured.inbox, []);
     console.log('ok 20 tool round executes and accumulates');
@@ -409,7 +411,7 @@ const HISTORY = [
     await captured.registered.handler({ commandId: 'c18', agent, rawInput: 'hi', attachments: [], signal });
     assert.equal(captured.toolCalls.length, 0);
     const toolResultMsg = captured.requests[1].messages.at(-1);
-    assert.equal(toolResultMsg.content[0].type, 'tool-result');
+    assert.equal(toolResultMsg.role, 'tool');
     console.log('ok 21 malformed arguments handled');
 }
 
@@ -521,7 +523,7 @@ const HISTORY = [
     await bad.captured.registered.handler({ commandId: 'c29', agent: bad.agent, rawInput: '改写它', attachments: [], signal: bad.signal });
     assert.equal(bad.captured.toolCalls.length, 0, 'an overwrite was allowed');
     const refusalMsg = bad.captured.requests[1].messages.at(-1);
-    assert.match(refusalMsg.content[0].content[0].text, /只能新建文件/);
+    assert.match(refusalMsg.content[0].text, /只能新建文件/);
     // the same file, one turn later: it exists now, but WE made it
     const again = [
         () => toolCallStream('', 'call-again', 'write', JSON.stringify({ file_path: created, content: 'updated' })),

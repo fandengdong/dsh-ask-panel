@@ -14,13 +14,6 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const PLUGIN_DIR = process.env.DSH_ASK_PANEL_DIR ?? join(
-    process.env.DSH_HOME ?? join(homedir(), '.dsh'),
-    'profiles',
-    process.env.DSH_PROFILE ?? 'web',
-    'plugins',
-    'ask-panel',
-);
 const INSTALLED = join(PLUGIN_DIR, 'client.js');
 
 /**
@@ -279,7 +272,7 @@ assert.equal(probe.entry.id, 'dsh-ask-panel');
 assert.equal(typeof probe.face.apply, 'function');
 assert.deepEqual(
     probe.face.inject,
-    ['slots', 'locale', 'remote', 'remote.commands', 'sessions', 'sidebarRightTabs', 'sidebarRight'],
+    ['slots', 'locale', 'remote', 'remote.commands', 'uiSession', 'sessions', 'sidebarRightTabs', 'sidebarRight'],
 );
 
 /* 3. apply() registers copy, the live stream, the result capture, the tab type, and the body */

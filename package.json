@@ -17,19 +17,20 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-commands",
         "@deepseek-ai/dsh-client-ui-layout",
-        "@deepseek-ai/dsh-client-ui-renderer"
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-session"
       ]
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "*",
-    "@deepseek-ai/dsh-api-remotes": "*",
-    "@deepseek-ai/dsh-commands": "*",
-    "@deepseek-ai/dsh-llm": "*",
-    "@deepseek-ai/dsh-system-prompt": "*",
-    "@deepseek-ai/dsh-timeout": "*",
-    "@deepseek-ai/dsh-tools": "*",
-    "@deepseek-ai/schemastery": "*"
+    "@deepseek-ai/cordis": ">=0.1.7-rc.2",
+    "@deepseek-ai/dsh-api-remotes": ">=0.1.7-rc.2",
+    "@deepseek-ai/dsh-commands": ">=0.1.7-rc.2",
+    "@deepseek-ai/dsh-llm": ">=0.1.7-rc.2",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.7-rc.2",
+    "@deepseek-ai/dsh-timeout": ">=0.1.7-rc.2",
+    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.2",
+    "@deepseek-ai/schemastery": ">=0.1.7-rc.2"
   },
   "license": "MIT",
   "keywords": [

@@ -58,6 +58,8 @@ window.__ModuleLoader__.load({
 			you: "你",
 			resetTitle: "重置上下文：下一个问题按当前上下文重新开始（记录保留）",
 			resetNote: "上下文已重置",
+			noSession: "无法确定当前会话",
+			stillBusy: "上一条问题仍在等待回答 —— 若长时间无响应，点 ⟲ 重置后再试",
 		};
 
 		/** English dictionary, checked complete against the Chinese key set. */
@@ -73,6 +75,8 @@ window.__ModuleLoader__.load({
 			you: "You",
 			resetTitle: "Reset the context: the next question re-anchors (the log stays)",
 			resetNote: "Context reset",
+			noSession: "Cannot determine the current session",
+			stillBusy: "The previous question is still waiting — if it stays silent, reset with ⟲ and retry",
 		};
 
 		/**
@@ -83,7 +87,16 @@ window.__ModuleLoader__.load({
 		 * without declaring it throws `cannot get property "remote.commands" without
 		 * inject` at call time — which is exactly how the first follow-up failed.
 		 */
-		const inject = ["slots", "locale", "remote", "remote.commands", "sessions", "sidebarRightTabs", "sidebarRight"];
+		const inject = [
+		"slots",
+		"locale",
+		"remote",
+		"remote.commands",
+		"uiSession",
+		"sessions",
+		"sidebarRightTabs",
+		"sidebarRight"
+	];
 
 		/** How much of the live thinking trace stays on screen. */
 		const REASONING_TAIL = 700;
@@ -191,14 +204,75 @@ window.__ModuleLoader__.load({
 		 *
 		 * @returns the current session id, or null when none is selected.
 		 */
-		function currentSessionId() {
-			if (clientCtx === null) return null;
-			try {
-				const id = clientCtx.sessions.list.getSnapshot()?.current;
-				return typeof id === "string" ? id : null;
-			} catch {
-				return null;
+		/**
+		 * The current session id, across the shapes dsh's client has used.
+		 *
+		 * 0.1.6 answered on `sessions.list.getSnapshot().current`; 0.1.7 moved the
+		 * service behind a `UiSession` adapter, and this plugin then went silent —
+		 * every question returned early because the id read as null. Rather than pin
+		 * one shape, probe the plausible accessors, report which one answered, and
+		 * survive the next move too.
+		 *
+		 * @returns the id and the accessor that produced it.
+		 */
+		function probeSession() {
+			if (clientCtx === null) return { id: null, source: "no-ctx" };
+			const read = (fn) => {
+				try {
+					const value = fn();
+					return typeof value === "string" && value.length > 0 ? value : null;
+				} catch {
+					return null;
+				}
+			};
+			const snapshot = () => {
+				try {
+					return clientCtx.sessions?.list?.getSnapshot?.();
+				} catch {
+					return undefined;
+				}
+			};
+			const candidates = [
+				// 0.1.7 registers the client session service as `uiSession`, a binding
+				// source whose `.value.key` is the active session id. The old name is
+				// still probed below so one build serves both hosts.
+				["uiSession.current.value.key", () => clientCtx.uiSession?.current?.value?.key],
+				["uiSession.current.value.id", () => clientCtx.uiSession?.current?.value?.id],
+				["uiSession.adapter.current.value.key", () => clientCtx.uiSession?.adapter?.current?.value?.key],
+				["uiSession.current.key", () => clientCtx.uiSession?.current?.key],
+				["sessions.list.current", () => snapshot()?.current],
+				["sessions.list.currentId", () => snapshot()?.currentId],
+				["sessions.list.activeId", () => snapshot()?.activeId],
+				["sessions.list.selectedId", () => snapshot()?.selectedId],
+				["sessions.list.active", () => snapshot()?.active],
+				["sessions.current", () => clientCtx.sessions?.current],
+				["sessions.currentId", () => clientCtx.sessions?.currentId],
+				["sessions.active", () => clientCtx.sessions?.active],
+				["session.active", () => clientCtx.session?.active],
+				["session.current", () => clientCtx.session?.current],
+				["session.currentId", () => clientCtx.session?.currentId]
+			];
+			for (const [source, fn] of candidates) {
+				const id = read(fn);
+				if (id !== null) return { id, source };
 			}
+			return { id: null, source: "none" };
+		}
+
+		/** The session snapshot's own field names, for when no probe answers. */
+		function snapshotKeys() {
+			if (clientCtx === null) return "no-ctx";
+			try {
+				const snap = clientCtx.sessions?.list?.getSnapshot?.();
+				if (snap === undefined || snap === null) return "no-snapshot";
+				return Object.keys(snap).join("|");
+			} catch (error) {
+				return `err:${error instanceof Error ? error.name : "?"}`;
+			}
+		}
+
+		function currentSessionId() {
+			return probeSession().id;
 		}
 
 		/**
@@ -218,6 +292,18 @@ window.__ModuleLoader__.load({
 				// No seat mounted yet, or the type is not registered: the durable
 				// command card still carries the answer, so this stays contained.
 				return false;
+			}
+		}
+
+		/** How many commands the client's directory holds, when it can say. */
+		function commandCount() {
+			if (clientCtx === null) return "?";
+			try {
+				const dir = clientCtx.commands;
+				const list = dir.list === undefined ? undefined : dir.list();
+				return Array.isArray(list) ? String(list.length) : "?";
+			} catch {
+				return "err";
 			}
 		}
 
@@ -342,13 +428,25 @@ window.__ModuleLoader__.load({
 		 * @param text - the question.
 		 */
 		async function ask(text) {
-			if (clientCtx === null) return;
+			if (clientCtx === null) {
+				// `publish` needs no context: the panel's own listeners already exist.
+				publish({ sessionId: "", turns: [], sending: false, error: "面板上下文未就绪（客户端面未激活）" });
+				return;
+			}
 			const question = text.trim();
 			if (question.length === 0) return;
+			const say = clientCtx === null ? (text) => text : clientCtx.locale.bind(NS);
 			const sessionId = currentSessionId();
-			if (sessionId === null) return;
+			if (sessionId === null) {
+				// A silent no-op here cost a whole diagnosis round: say it out loud.
+				publish({ sessionId: "", turns: [], sending: false, error: `${say("noSession")}（sessions.list 未给出当前会话 id）` });
+				return;
+			}
 			const panel = current !== null && current.sessionId === sessionId ? current : null;
-			if (panel !== null && isBusy(panel)) return;
+			if (panel !== null && isBusy(panel)) {
+				publish({ ...panel, error: say("stillBusy") });
+				return;
+			}
 			// Show the question at once, whether the panel is empty or holds a restored
 			// log: the host's `start` frame then reconciles this very turn instead of
 			// appending a duplicate.
@@ -863,6 +961,16 @@ window.__ModuleLoader__.load({
 				lineHeight: "1",
 				fontSize: "14px"
 			},
+			/** Temporary: makes the panel's internal state readable at a glance. */
+			diag: {
+				padding: "4px 16px 6px",
+				borderTop: "1px dashed var(--dsw-alias-border-l2)",
+				color: "var(--dsw-alias-label-caption)",
+				fontSize: "10px",
+				fontFamily: "monospace",
+				whiteSpace: "nowrap",
+				overflow: "hidden"
+			},
 			/** A boundary marker: the host's context was reset, the log was not. */
 			note: {
 				padding: "0 16px 10px",
@@ -980,6 +1088,15 @@ window.__ModuleLoader__.load({
 					: null,
 				panel !== null && panel.error.length > 0
 					? React.createElement("div", { key: "error", style: styles.error }, panel.error)
+					: null,
+				// Silent in normal use, loud exactly when this plugin cannot find the
+				// session — the failure that cost several rounds of blind debugging
+				// after dsh renamed the client session service.
+				activeSession === null
+					? React.createElement("div", { key: "diag", style: styles.diag },
+						`side panel not ready · ctx=${clientCtx === null ? "null" : "ok"}`
+						+ ` · session=null · src=${probeSession().source}`
+						+ ` · keys=${snapshotKeys()}`)
 					: null,
 				React.createElement("div", { key: "composer", style: styles.composer }, [
 					React.createElement("button", {
