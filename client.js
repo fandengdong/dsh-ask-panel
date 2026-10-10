@@ -773,19 +773,38 @@ window.__ModuleLoader__.load({
 				flexDirection: "column",
 				marginBottom: "16px"
 			},
-			/** Rules mean "the context changed here", so nothing else uses a line. */
+			/**
+			 * A context boundary reads as a band, not a hairline.
+			 *
+			 * The first attempt was a 1px rule with caption-coloured text, which is
+			 * invisible on a dark surface at this width. A surface plate with primary
+			 * text is legible at a glance, and staying neutral keeps the accent colour
+			 * meaning one thing only: a question of yours.
+			 */
 			boundary: {
 				display: "flex",
 				alignItems: "center",
-				gap: "8px",
-				margin: "16px 0"
+				justifyContent: "center",
+				gap: "7px",
+				margin: "18px 0",
+				padding: "6px 10px",
+				borderRadius: "6px",
+				background: "var(--dsw-alias-bg-layer-2, var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.07)))"
 			},
-			boundaryLine: {
-				flex: "1 1 auto",
-				height: "1px",
-				background: "var(--dsw-alias-border-l2)"
+			boundaryMark: {
+				color: "var(--dsw-alias-brand-primary, #4c8dff)",
+				fontSize: "12px",
+				lineHeight: 1
 			},
 			boundaryLabel: {
+				flex: "none",
+				color: "var(--dsw-alias-label-primary)",
+				fontSize: "11px",
+				fontWeight: 600,
+				letterSpacing: "0.02em",
+				whiteSpace: "nowrap"
+			},
+			boundaryTime: {
 				flex: "none",
 				color: "var(--dsw-alias-label-caption)",
 				fontSize: "11px",
@@ -1063,10 +1082,10 @@ window.__ModuleLoader__.load({
 						: (last && thinking.length === 0 ? t("working") : "");
 					if (turn.divider === true) {
 						return React.createElement("div", { key: turn.key, style: styles.boundary }, [
-							React.createElement("span", { key: "l", style: styles.boundaryLine }),
-							React.createElement("span", { key: "t", style: styles.boundaryLabel },
-								`\u27f2 ${turn.text}${turn.time === undefined ? "" : ` \u00b7 ${hhmm(turn.time)}`}`),
-							React.createElement("span", { key: "r", style: styles.boundaryLine })
+							React.createElement("span", { key: "mark", style: styles.boundaryMark }, "\u27f2"),
+							React.createElement("span", { key: "t", style: styles.boundaryLabel }, turn.text),
+							React.createElement("span", { key: "time", style: styles.boundaryTime },
+								turn.time === undefined ? "" : hhmm(turn.time))
 						]);
 					}
 					return React.createElement("div", {
