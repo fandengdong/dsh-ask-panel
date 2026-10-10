@@ -796,25 +796,45 @@ window.__ModuleLoader__.load({
 				margin: "12px 0 10px"
 			},
 			/** The human's question, as a right-aligned bubble — the clearest signal of who spoke. */
+			/**
+			 * The question, and the only strongly coloured thing in the thread.
+			 *
+			 * In a narrow column the old neutral bubble was indistinguishable from
+			 * the answers around it, so finding "what I asked" in a long exchange
+			 * meant reading everything. An accent tint plus a leading bar gives the
+			 * eye something to catch while scrolling.
+			 */
 			question: {
 				alignSelf: "flex-end",
-				maxWidth: "88%",
-				background: "var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.07))",
-				borderRadius: "10px",
-				padding: "6px 10px",
-				marginBottom: "8px",
+				maxWidth: "90%",
+				background: "var(--dsw-alias-interactive-bg-hover-accent, rgba(76, 141, 255, 0.14))",
+				borderLeft: "3px solid var(--dsw-alias-brand-primary, #4c8dff)",
+				borderRadius: "8px",
+				padding: "7px 10px 7px 9px",
+				marginBottom: "10px",
 				fontSize: "12.5px",
 				lineHeight: 1.55,
 				whiteSpace: "pre-wrap",
 				overflowWrap: "anywhere"
 			},
-			questionLabel: {
-				display: "block",
-				color: "var(--dsw-alias-label-caption)",
-				fontSize: "10px",
-				letterSpacing: "0.06em",
-				textTransform: "uppercase",
+			/** Who asked, and when — the time also tells two turns apart at a glance. */
+			questionMeta: {
+				display: "flex",
+				alignItems: "baseline",
+				justifyContent: "space-between",
+				gap: "8px",
 				marginBottom: "2px"
+			},
+			questionLabel: {
+				color: "var(--dsw-alias-brand-text, #4c8dff)",
+				fontSize: "10px",
+				fontWeight: 700,
+				letterSpacing: "0.08em",
+				textTransform: "uppercase"
+			},
+			questionTime: {
+				color: "var(--dsw-alias-label-caption)",
+				fontSize: "10px"
 			},
 			answer: {
 				overflowWrap: "anywhere"
@@ -1056,7 +1076,11 @@ window.__ModuleLoader__.load({
 							key: "q",
 							style: styles.question
 						}, [
-							React.createElement("span", { key: "label", style: styles.questionLabel }, t("you")),
+							React.createElement("div", { key: "meta", style: styles.questionMeta }, [
+								React.createElement("span", { key: "label", style: styles.questionLabel }, t("you")),
+								React.createElement("span", { key: "time", style: styles.questionTime },
+									turn.time === undefined ? "" : hhmm(turn.time))
+							]),
 							React.createElement("span", { key: "text" }, turn.question)
 						]),
 						thinking.length === 0 ? null : React.createElement("div", {
