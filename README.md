@@ -11,8 +11,12 @@ holds — plus read-only lookups — and stream into a tab beside the conversati
 
 - **Streaming answers** in a right-Sidebar tab, with a live three-line window showing the
   model's thinking (a high-effort reasoning model looks frozen without it)
-- **Follow-up questions.** The thread continues, and because the seed is re-derived per
-  question, a panel left open for an hour still answers about the *current* state
+- **Follow-up questions, scoped to one context.** Within the same context the thread
+  continues, and the seed is re-derived per question, so answers track the current state.
+  When the main conversation's context is **refreshed** — compacted, cleared — the panel
+  starts a *new* conversation derived from that context: a side thread is bound to the
+  context epoch it came from (the root human turn), and nothing from before the refresh is
+  carried into the request
 - **Markdown**, tables included
 - **Reset (`⟲`)** drops the side context and marks the boundary in the log — it never erases
   what you already read
@@ -26,7 +30,7 @@ holds — plus read-only lookups — and stream into a tab beside the conversati
 ### 1. Install the package into a profile
 
 ```bash
-dsh plugin --profile web add github:<you>/dsh-ask-panel   # git
+dsh plugin --profile web add github:fandengdong/dsh-ask-panel   # git
 dsh plugin --profile web add dsh-ask-panel                # registry
 dsh plugin --profile web add /path/to/dsh-ask-panel       # local directory
 ```
@@ -50,7 +54,8 @@ inherits and which survives profile re-creation:
         layoutWidth: false       # see "Caveats"
 ```
 
-See `cordis.patch.yml.example`.
+See `cordis.patch.yml.example`. This build serves both dsh 0.1.6 and 0.1.7 (it probes
+for the client session service rather than hard-coding one name).
 
 ### 3. Restart, then refresh
 
