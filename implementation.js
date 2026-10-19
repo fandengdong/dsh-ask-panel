@@ -668,11 +668,15 @@ export async function execute(ctx, invocation) {
         // turns carry over, which is what keeps a follow-up coherent.
         const derived = agent.session.deriveMessages();
         const seed = sanitizeHistory(derived);
-        traceSeed(sessionId, derived, seed);
         if (startsNewThread) createdBySideChat.delete(sessionId);
-        const side = startsNewThread ? [] : takeSideThread(sessionId) ?? [];
+        // The carried side thread is sliced out of an earlier request, so its first
+        // message can be a tool result whose call stayed behind — cleaning only the
+        // seed left the provider rejecting the whole request with "tool result has
+        // no matching call". Clean both halves, each on its own.
+        const side = sanitizeHistory(startsNewThread ? [] : takeSideThread(sessionId) ?? []);
         seedLength = seed.length;
         messages = [...seed, ...side, questionMessage(question)];
+        traceSeed(sessionId, derived, [...seed, ...side]);
         stream.start(question, side.length === 0);
 
         // Accumulated across rounds: the browser already rendered every round's

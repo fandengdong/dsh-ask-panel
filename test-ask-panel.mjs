@@ -591,4 +591,36 @@ const HISTORY = [
     console.log('ok 31 a mid-history gap repairs instead of truncating');
 }
 
+/* 32. trimming a long side thread can never leave an orphan tool result */
+{
+    // Four rounds of question + tool call: the carried side thread outgrows its cap,
+    // so the trim point may land inside a tool round. The request must still be valid.
+    const rounds = Array.from({ length: 8 }, (_, index) => (index % 2 === 0
+        ? () => toolCallStream('先看下。', `call-${index}`, 'read', '{"file_path":"a.txt"}')
+        : () => stopStream('A。')));
+    const it = harness({
+        header: { config: { provider: 'p', model: 'm' } },
+        assemblyTools: [{ name: 'read', description: '', parameters: {} }],
+        stream: (round) => rounds[round](),
+    });
+    for (let turn = 0; turn < 4; turn += 1) {
+        await it.captured.registered.handler({
+            commandId: `c32-${turn}`, agent: it.agent, rawInput: `第 ${turn} 问`,
+            attachments: [], signal: it.signal,
+        });
+    }
+    const request = it.captured.requests.at(-1);
+    const calls = new Set();
+    for (const message of request.messages) {
+        for (const block of message.content ?? []) if (block.type === 'tool-call') calls.add(block.id);
+    }
+    for (const message of request.messages) {
+        for (const block of message.content ?? []) {
+            if (block.type !== 'tool-result') continue;
+            assert.ok(calls.has(block.toolCallId), `orphan tool result ${block.toolCallId}`);
+        }
+    }
+    console.log('ok 32 a trimmed side thread leaves no orphan result');
+}
+
 console.log('\nall /ask stub checks passed');
