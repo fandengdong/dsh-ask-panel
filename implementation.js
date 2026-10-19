@@ -166,23 +166,7 @@ const DELTA_FLUSH_CHARS = 48;
 /** ...or once this long has passed, so a slow stream still types out. */
 const DELTA_FLUSH_MS = 60;
 
-/**
- * A side thread idle this long is forgotten rather than resumed.
- *
- * Ten minutes, not thirty: a resumed thread is injected directly in front of the
- * new question, so an old one does not merely add tokens — it outranks the fresh
- * main history by adjacency, and the answer echoes a state the conversation has
- * long left behind.
- */
-const SIDE_TTL_MS = 10 * 60 * 1000;
 
-/**
- * Messages kept per side thread.
- *
- * Eight (about four exchanges) is enough for a follow-up to make sense and small
- * enough that the fresh seed, not yesterday's analysis, stays authoritative.
- */
-const MAX_SIDE_MESSAGES = 8;
 
 /** `/ask --new <question>` starts a fresh side thread instead of continuing one. */
 const NEW_THREAD_PREFIX = '--new';
@@ -190,12 +174,7 @@ const NEW_THREAD_PREFIX = '--new';
 /** `/ask --reset` drops the side thread and asks nothing. */
 const RESET_FLAG = '--reset';
 
-/**
- * Live side threads, keyed by session id. This is what makes follow-up questions
- * possible without a forked agent: the messages built for one question are kept
- * and extended by the next.
- */
-const sideThreads = new Map();
+
 
 /**
  * Paths this side chat created, per session. Without this the create-only rule
@@ -343,49 +322,6 @@ function isPlainUserTurn(message) {
     return message.role === 'user' && !(message.content ?? []).some((block) => block.type === 'tool-result');
 }
 
-/**
- * Keep a side thread within {@link MAX_SIDE_MESSAGES} without ever cutting
- * between an assistant tool call and the results answering it — which the
- * provider rejects — so the tail is advanced to the next plain human turn.
- *
- * @param messages - the full side history.
- * @returns the trimmed history.
- */
-function trimSideThread(messages) {
-    if (messages.length <= MAX_SIDE_MESSAGES) return messages;
-    let start = messages.length - MAX_SIDE_MESSAGES;
-    while (start < messages.length && !isPlainUserTurn(messages[start])) start += 1;
-    return messages.slice(start);
-}
-
-/**
- * Take the live side thread for one session, forgetting it when it has gone
- * stale.
- *
- * @param sessionId - owning session.
- * @returns the stored messages, or undefined to start a fresh thread.
- */
-function takeSideThread(sessionId) {
-    const thread = sideThreads.get(sessionId);
-    if (thread === undefined) return undefined;
-    if (Date.now() - thread.updatedAt > SIDE_TTL_MS || thread.messages.length === 0) {
-        sideThreads.delete(sessionId);
-        return undefined;
-    }
-    // Trim on the way out too: an existing thread may predate a smaller cap, and
-    // the cap must bind on the very next question rather than one answer later.
-    return trimSideThread(thread.messages);
-}
-
-/**
- * Remember the side thread so a follow-up question continues it.
- *
- * @param sessionId - owning session.
- * @param messages - the thread's full history, seed included.
- */
-function storeSideThread(sessionId, messages) {
-    sideThreads.set(sessionId, { messages: trimSideThread(messages), updatedAt: Date.now() });
-}
 
 /**
  * The single user message carrying the framing and the question.
@@ -628,11 +564,11 @@ export async function execute(ctx, invocation) {
     // reset control re-anchors the next question to a context with no side
     // history attached.
     if (raw === RESET_FLAG) {
-        const had = sideThreads.delete(sessionId);
-        // A reset drops the side context, so its claims on created files go too:
-        // afterwards those paths count as pre-existing and are read-only again.
+        // Nothing server-side holds a side context any more: each question is answered
+        // against the current main conversation. Only the file-creation claims reset,
+        // so those paths count as pre-existing and are read-only again.
         createdBySideChat.delete(sessionId);
-        return { kind: 'success', text: had ? '已重置侧边上下文。' : '侧边上下文本来就是空的。' };
+        return { kind: 'success', text: '已重置：下一问按当前主线上下文重新开始。' };
     }
 
     const startsNewThread = raw === NEW_THREAD_PREFIX || raw.startsWith(`${NEW_THREAD_PREFIX} `);
@@ -648,13 +584,8 @@ export async function execute(ctx, invocation) {
     const callDeadline = deadline(invocation.signal, TIMEOUT_MS, TIMEOUT_CODE);
     /** The side history once built; kept so a successful answer continues the thread. */
     let messages = null;
-    /** How much of `messages` is the re-derived seed, so only the side part is stored. */
-    let seedLength = 0;
     const settle = (result) => {
         stream.end(result);
-        if (messages !== null && result.kind === 'success') {
-            storeSideThread(sessionId, messages.slice(seedLength));
-        }
         return result;
     };
 
@@ -669,15 +600,14 @@ export async function execute(ctx, invocation) {
         const derived = agent.session.deriveMessages();
         const seed = sanitizeHistory(derived);
         if (startsNewThread) createdBySideChat.delete(sessionId);
-        // The carried side thread is sliced out of an earlier request, so its first
-        // message can be a tool result whose call stayed behind — cleaning only the
-        // seed left the provider rejecting the whole request with "tool result has
-        // no matching call". Clean both halves, each on its own.
-        const side = sanitizeHistory(startsNewThread ? [] : takeSideThread(sessionId) ?? []);
-        seedLength = seed.length;
-        messages = [...seed, ...side, questionMessage(question)];
-        traceSeed(sessionId, derived, [...seed, ...side]);
-        stream.start(question, side.length === 0);
+        // The panel's own history is DISPLAY state: it never enters the request.
+        // Merging it used to let an old side thread outrank the fresh conversation,
+        // and after trimming it could smuggle a tool result whose call was gone — the
+        // provider then rejected the whole request. Each question is now answered from
+        // the current main conversation alone.
+        messages = [...seed, questionMessage(question)];
+        traceSeed(sessionId, derived, seed);
+        stream.start(question, true);
 
         // Accumulated across rounds: the browser already rendered every round's
         // text, so the settled result must not drop the earlier ones.

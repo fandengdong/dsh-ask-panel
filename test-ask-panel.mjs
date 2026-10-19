@@ -448,24 +448,22 @@ const HISTORY = [
     console.log('ok 23 live stream frames');
 }
 
-/* 25. a second question continues the live side thread */
+/* 25. a second question is independent: the first answer is never carried */
 {
     const { captured, agent, signal } = harness({ header: { config: { provider: 'p', model: 'm' } }, messages: HISTORY });
     await captured.registered.handler({ commandId: 'c21', agent, rawInput: '第一个问题', attachments: [], signal });
-    const first = captured.requests[0].messages;
-    const firstLength = first.length;
     await captured.registered.handler({ commandId: 'c22', agent, rawInput: '第二个问题', attachments: [], signal });
     const second = captured.requests[1].messages;
-    // +2: the first question AND the answer it produced are both carried over
-    assert.equal(second.length, firstLength + 2);
-    assert.match(second.at(-2).content[0].text, /默认回答。/);
+    assert.equal(second.length, HISTORY.length + 1);
     assert.match(second.at(-1).content[0].text, /Side question:\n第二个问题$/);
+    // the panel's own history is display state: the earlier answer must not appear
+    assert.equal(JSON.stringify(second).includes('默认回答。'), false, 'the first answer leaked into the request');
     const starts = captured.frames.filter((frame) => frame.payload.kind === 'start');
-    assert.deepEqual(starts.map((frame) => frame.payload.fresh), [true, false]);
-    console.log('ok 25 follow-up continues the thread');
+    assert.deepEqual(starts.map((frame) => frame.payload.fresh), [true, true]);
+    console.log('ok 25 each question stands alone');
 }
 
-/* 26. a question whose answers failed is not carried forward as context */
+/* 26. a truncated answer is not carried either */
 {
     const { captured, agent, signal } = harness({
         header: { config: { provider: 'p', model: 'm' } },
@@ -473,20 +471,18 @@ const HISTORY = [
     });
     await captured.registered.handler({ commandId: 'c23', agent, rawInput: '会截断的问题', attachments: [], signal });
     await captured.registered.handler({ commandId: 'c24', agent, rawInput: '接着问', attachments: [], signal });
-    assert.equal(captured.requests[1].messages.length, captured.requests[0].messages.length + 2);
-    console.log('ok 26 partial answers still thread');
+    assert.equal(captured.requests[1].messages.length, captured.requests[0].messages.length);
+    console.log('ok 26 a truncated answer is not carried');
 }
 
-/* 27. --new starts a fresh thread */
+/* 27. `--new` is still accepted, and now means what every question means */
 {
     const { captured, agent, signal } = harness({ header: { config: { provider: 'p', model: 'm' } }, messages: HISTORY });
     await captured.registered.handler({ commandId: 'c25', agent, rawInput: '第一个问题', attachments: [], signal });
     await captured.registered.handler({ commandId: 'c26', agent, rawInput: '--new 重新开始', attachments: [], signal });
     assert.equal(captured.requests[1].messages.length, HISTORY.length + 1);
     assert.match(captured.requests[1].messages.at(-1).content[0].text, /Side question:\n重新开始$/);
-    const starts = captured.frames.filter((frame) => frame.payload.kind === 'start');
-    assert.deepEqual(starts.map((frame) => frame.payload.fresh), [true, true]);
-    console.log('ok 27 --new starts a fresh thread');
+    console.log('ok 27 --new is accepted');
 }
 
 /* 24. the host registered its event on the Remote forwarding allowlist */
@@ -548,28 +544,24 @@ const HISTORY = [
     console.log('ok 29 the round bound keeps the partial answer');
 }
 
-/* 30. a long side thread can never bury the fresh seed */
+/* 30. the panel's own history never enters the request, however long it gets */
 {
     const it = harness({
         header: { config: { provider: 'p', model: 'm' } },
         assemblyTools: [{ name: 'read', description: '', parameters: {} }],
         stream: () => stopStream('好的。'),
     });
-    for (let turn = 0; turn < 6; turn += 1) {
+    const lengths = [];
+    for (let turn = 0; turn < 4; turn += 1) {
         await it.captured.registered.handler({
             commandId: `c30-${turn}`, agent: it.agent, rawInput: `第 ${turn} 问`,
             attachments: [], signal: it.signal,
         });
+        lengths.push(it.captured.requests.at(-1).messages.length);
     }
-    const seedLength = 0; // this harness derives an empty main history
-    for (const [index, request] of it.captured.requests.entries()) {
-        // seed + carried side turns + the new question, and the carry stays bounded
-        const carried = request.messages.length - seedLength - 1;
-        assert.ok(carried <= 8, `turn ${index} carried ${carried} side messages`);
-        // the last message is the composed prompt, ending with the raw question
-        assert.match(request.messages.at(-1).content[0].text, /第 \d 问$/);
-    }
-    console.log('ok 30 the side carry stays bounded');
+    // empty main history + exactly one question, every time
+    assert.deepEqual(lengths, [1, 1, 1, 1]);
+    console.log('ok 30 the panel history never enters the request');
 }
 
 /* 31. a gap mid-history repairs instead of truncating everything after it */
@@ -589,38 +581,6 @@ const HISTORY = [
     // ...and the unanswered call itself is gone, so the provider accepts the request
     assert.equal(JSON.stringify(it.captured.requests[0].messages).includes('"lost"'), false);
     console.log('ok 31 a mid-history gap repairs instead of truncating');
-}
-
-/* 32. trimming a long side thread can never leave an orphan tool result */
-{
-    // Four rounds of question + tool call: the carried side thread outgrows its cap,
-    // so the trim point may land inside a tool round. The request must still be valid.
-    const rounds = Array.from({ length: 8 }, (_, index) => (index % 2 === 0
-        ? () => toolCallStream('先看下。', `call-${index}`, 'read', '{"file_path":"a.txt"}')
-        : () => stopStream('A。')));
-    const it = harness({
-        header: { config: { provider: 'p', model: 'm' } },
-        assemblyTools: [{ name: 'read', description: '', parameters: {} }],
-        stream: (round) => rounds[round](),
-    });
-    for (let turn = 0; turn < 4; turn += 1) {
-        await it.captured.registered.handler({
-            commandId: `c32-${turn}`, agent: it.agent, rawInput: `第 ${turn} 问`,
-            attachments: [], signal: it.signal,
-        });
-    }
-    const request = it.captured.requests.at(-1);
-    const calls = new Set();
-    for (const message of request.messages) {
-        for (const block of message.content ?? []) if (block.type === 'tool-call') calls.add(block.id);
-    }
-    for (const message of request.messages) {
-        for (const block of message.content ?? []) {
-            if (block.type !== 'tool-result') continue;
-            assert.ok(calls.has(block.toolCallId), `orphan tool result ${block.toolCallId}`);
-        }
-    }
-    console.log('ok 32 a trimmed side thread leaves no orphan result');
 }
 
 console.log('\nall /ask stub checks passed');
