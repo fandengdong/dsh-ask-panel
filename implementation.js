@@ -231,10 +231,21 @@ function resolveRoute(ctx, agent) {
  * @returns a history the provider will accept.
  */
 export function sanitizeHistory(messages) {
+    // Two representations coexist: 0.1.7 answers a call with a whole `role: "tool"`
+    // message carrying `toolCallId`, while a `tool-result` content block is the older
+    // shape. Looking only for the block left every call looking unanswered (so the
+    // calls were dropped) while the orphan tool messages stayed — the provider then
+    // rejected the request with "tool result has no matching call". The same blind
+    // spot made the old prefix trimmer cut the history at the first tool call.
     const answered = new Set();
     for (const message of messages) {
+        if (message.role === 'tool' && typeof message.toolCallId === 'string') {
+            answered.add(message.toolCallId);
+        }
         for (const block of message.content ?? []) {
-            if (block.type === 'tool-result') answered.add(block.toolCallId);
+            if (block.type === 'tool-result' && typeof block.toolCallId === 'string') {
+                answered.add(block.toolCallId);
+            }
         }
     }
     const called = new Set();
@@ -245,6 +256,11 @@ export function sanitizeHistory(messages) {
     }
     const kept = [];
     for (const message of messages) {
+        if (message.role === 'tool') {
+            // A tool message that answers no surviving call cannot stay.
+            if (typeof message.toolCallId === 'string' && called.has(message.toolCallId)) kept.push(message);
+            continue;
+        }
         const original = message.content ?? [];
         const blocks = original.filter((block) => {
             if (block.type === 'tool-call') return answered.has(block.id);

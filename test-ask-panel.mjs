@@ -309,6 +309,19 @@ const HISTORY = [
     assert.deepEqual(implementation.sanitizeHistory([...balanced, { role: 'user', content: [result('z')] }]), balanced);
     // A fully answered history is untouched.
     assert.equal(implementation.sanitizeHistory([...balanced, { role: 'assistant', content: [call('e')] }, { role: 'user', content: [result('e')] }]).length, 5);
+    // 0.1.7 answers with a whole tool message, not a tool-result block: pairing must
+    // see it, or every call looks unanswered while the tool message looks orphaned.
+    const modern = [
+        ask,
+        { role: 'assistant', content: [call('m')] },
+        { role: 'tool', toolCallId: 'm', content: [{ type: 'text', text: 'read out' }] },
+    ];
+    assert.deepEqual(implementation.sanitizeHistory(modern), modern);
+    // ...and a tool message whose call is gone must go.
+    assert.deepEqual(
+        implementation.sanitizeHistory([...modern, { role: 'tool', toolCallId: 'gone', content: [{ type: 'text', text: 'x' }] }]),
+        modern,
+    );
     console.log('ok 14-16 gaps repaired, never truncated');
 }
 
