@@ -448,22 +448,22 @@ const HISTORY = [
     console.log('ok 23 live stream frames');
 }
 
-/* 25. a second question is independent: the first answer is never carried */
+/* 25. inside one context epoch a follow-up continues the thread */
 {
     const { captured, agent, signal } = harness({ header: { config: { provider: 'p', model: 'm' } }, messages: HISTORY });
     await captured.registered.handler({ commandId: 'c21', agent, rawInput: '第一个问题', attachments: [], signal });
+    const firstLength = captured.requests[0].messages.length;
     await captured.registered.handler({ commandId: 'c22', agent, rawInput: '第二个问题', attachments: [], signal });
     const second = captured.requests[1].messages;
-    assert.equal(second.length, HISTORY.length + 1);
-    assert.match(second.at(-1).content[0].text, /Side question:\n第二个问题$/);
-    // the panel's own history is display state: the earlier answer must not appear
-    assert.equal(JSON.stringify(second).includes('默认回答。'), false, 'the first answer leaked into the request');
+    // +2: the earlier question and the answer it produced both carry over
+    assert.equal(second.length, firstLength + 2);
+    assert.match(second.at(-2).content[0].text, /默认回答。/);
     const starts = captured.frames.filter((frame) => frame.payload.kind === 'start');
-    assert.deepEqual(starts.map((frame) => frame.payload.fresh), [true, true]);
-    console.log('ok 25 each question stands alone');
+    assert.deepEqual(starts.map((frame) => frame.payload.fresh), [true, false]);
+    console.log('ok 25 a follow-up continues within the epoch');
 }
 
-/* 26. a truncated answer is not carried either */
+/* 26. a truncated answer still counts as an answer and is carried */
 {
     const { captured, agent, signal } = harness({
         header: { config: { provider: 'p', model: 'm' } },
@@ -471,18 +471,20 @@ const HISTORY = [
     });
     await captured.registered.handler({ commandId: 'c23', agent, rawInput: '会截断的问题', attachments: [], signal });
     await captured.registered.handler({ commandId: 'c24', agent, rawInput: '接着问', attachments: [], signal });
-    assert.equal(captured.requests[1].messages.length, captured.requests[0].messages.length);
-    console.log('ok 26 a truncated answer is not carried');
+    assert.equal(captured.requests[1].messages.length, captured.requests[0].messages.length + 2);
+    console.log('ok 26 a truncated answer is carried');
 }
 
-/* 27. `--new` is still accepted, and now means what every question means */
+/* 27. --new starts a fresh thread inside the current epoch */
 {
     const { captured, agent, signal } = harness({ header: { config: { provider: 'p', model: 'm' } }, messages: HISTORY });
     await captured.registered.handler({ commandId: 'c25', agent, rawInput: '第一个问题', attachments: [], signal });
     await captured.registered.handler({ commandId: 'c26', agent, rawInput: '--new 重新开始', attachments: [], signal });
     assert.equal(captured.requests[1].messages.length, HISTORY.length + 1);
     assert.match(captured.requests[1].messages.at(-1).content[0].text, /Side question:\n重新开始$/);
-    console.log('ok 27 --new is accepted');
+    const starts = captured.frames.filter((frame) => frame.payload.kind === 'start');
+    assert.deepEqual(starts.map((frame) => frame.payload.fresh), [true, true]);
+    console.log('ok 27 --new starts a fresh thread');
 }
 
 /* 24. the host registered its event on the Remote forwarding allowlist */
@@ -544,24 +546,40 @@ const HISTORY = [
     console.log('ok 29 the round bound keeps the partial answer');
 }
 
-/* 30. the panel's own history never enters the request, however long it gets */
+/* 30. the carried thread stays bounded no matter how long the panel is used */
 {
     const it = harness({
         header: { config: { provider: 'p', model: 'm' } },
         assemblyTools: [{ name: 'read', description: '', parameters: {} }],
         stream: () => stopStream('好的。'),
     });
-    const lengths = [];
-    for (let turn = 0; turn < 4; turn += 1) {
+    for (let turn = 0; turn < 6; turn += 1) {
         await it.captured.registered.handler({
             commandId: `c30-${turn}`, agent: it.agent, rawInput: `第 ${turn} 问`,
             attachments: [], signal: it.signal,
         });
-        lengths.push(it.captured.requests.at(-1).messages.length);
     }
-    // empty main history + exactly one question, every time
-    assert.deepEqual(lengths, [1, 1, 1, 1]);
-    console.log('ok 30 the panel history never enters the request');
+    for (const request of it.captured.requests) {
+        assert.ok(request.messages.length - 1 <= 8, `carried ${request.messages.length - 1} side messages`);
+    }
+    console.log('ok 30 the carried thread stays bounded');
+}
+
+/* 33. a refreshed context derives a NEW conversation: the pre-refresh thread is dropped */
+{
+    const epoch = [
+        { role: 'user', content: [{ type: 'text', text: '根消息 A' }] },
+        { role: 'assistant', content: [{ type: 'text', text: '答 A' }] },
+    ];
+    const it = harness({ header: { config: { provider: 'p', model: 'm' } }, messages: epoch });
+    await it.captured.registered.handler({ commandId: 'c31a', agent: it.agent, rawInput: '第一问', attachments: [], signal: it.signal });
+    // a context refresh: the root human turn is replaced by a summary
+    epoch[0] = { role: 'user', content: [{ type: 'text', text: '【摘要】根消息被摘要替换' }] };
+    await it.captured.registered.handler({ commandId: 'c31b', agent: it.agent, rawInput: '第二问', attachments: [], signal: it.signal });
+    const second = it.captured.requests[1].messages;
+    assert.equal(second.length, epoch.length + 1, 'the pre-refresh thread followed the refreshed context');
+    assert.equal(JSON.stringify(second).includes('默认回答。'), false);
+    console.log('ok 33 a refreshed context starts a new side conversation');
 }
 
 /* 31. a gap mid-history repairs instead of truncating everything after it */

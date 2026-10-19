@@ -460,6 +460,80 @@ function policyRefusal(name, args, agent) {
         + `（其中 ${CREATE_ONLY_TOOLS.join('、')} 仅限新建文件）。请改用这些工具，或直接说明你无法查证。`;
 }
 
+/** A side thread idle this long is forgotten rather than resumed. */
+const SIDE_TTL_MS = 10 * 60 * 1000;
+
+/** Messages kept per side thread: enough for a follow-up, small next to the seed. */
+const MAX_SIDE_MESSAGES = 8;
+
+/**
+ * Side threads, keyed by session.
+ *
+ * A thread belongs to one CONTEXT EPOCH, identified by {@link contextAnchor}: when
+ * the main conversation is refreshed — compacted, cleared — the derived history's
+ * root human turn is replaced, the anchor changes, and the thread is dropped. The
+ * panel then behaves as a new conversation derived from the current context, which
+ * is what "refresh the context" has to mean for a side channel.
+ */
+const sideThreads = new Map();
+
+/** A cheap, stable string hash (FNV-1a); enough to notice a replaced root turn. */
+function fingerprint(text) {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16);
+}
+
+/**
+ * Identify the context epoch a derived history belongs to.
+ *
+ * The first human turn is the root of everything derived from it: an append leaves
+ * it untouched, while a compaction or a clear replaces it with a summary or a new
+ * first message. Hashing that one turn therefore separates "the same conversation,
+ * longer" from "a different context".
+ *
+ * @param messages - the derived history.
+ * @returns an opaque anchor.
+ */
+function contextAnchor(messages) {
+    const root = messages.find((message) => message.role === 'user'
+        && (message.content ?? []).some((block) => block.type === 'text'));
+    if (root === undefined) return 'empty';
+    const text = (root.content ?? []).map((block) => (block.type === 'text' ? block.text : '')).join('');
+    return fingerprint(text);
+}
+
+/** Keep a side thread within {@link MAX_SIDE_MESSAGES}. */
+function trimSideThread(messages) {
+    return messages.length <= MAX_SIDE_MESSAGES ? messages : messages.slice(-MAX_SIDE_MESSAGES);
+}
+
+/**
+ * Take the side thread for this epoch, or nothing when the epoch changed.
+ *
+ * @param sessionId - owning session.
+ * @param anchor - the current context epoch.
+ * @returns the carried history, or undefined.
+ */
+function takeSideThread(sessionId, anchor) {
+    const thread = sideThreads.get(sessionId);
+    if (thread === undefined) return undefined;
+    if (thread.anchor !== anchor || Date.now() - thread.updatedAt > SIDE_TTL_MS
+        || thread.messages.length === 0) {
+        sideThreads.delete(sessionId);
+        return undefined;
+    }
+    return thread.messages;
+}
+
+/** Record a thread against the epoch that produced it. */
+function storeSideThread(sessionId, anchor, messages) {
+    sideThreads.set(sessionId, { anchor, messages: trimSideThread(messages), updatedAt: Date.now() });
+}
+
 /**
  * Publish live side-answer frames to the browser.
  *
@@ -567,6 +641,7 @@ export async function execute(ctx, invocation) {
         // Nothing server-side holds a side context any more: each question is answered
         // against the current main conversation. Only the file-creation claims reset,
         // so those paths count as pre-existing and are read-only again.
+        sideThreads.delete(sessionId);
         createdBySideChat.delete(sessionId);
         return { kind: 'success', text: '已重置：下一问按当前主线上下文重新开始。' };
     }
@@ -584,8 +659,15 @@ export async function execute(ctx, invocation) {
     const callDeadline = deadline(invocation.signal, TIMEOUT_MS, TIMEOUT_CODE);
     /** The side history once built; kept so a successful answer continues the thread. */
     let messages = null;
+    /** The context epoch this request derived from; see {@link contextAnchor}. */
+    let anchor = 'empty';
+    /** How much of `messages` is the seed, so only the side turns are stored. */
+    let seedLength = 0;
     const settle = (result) => {
         stream.end(result);
+        if (messages !== null && result.kind === 'success') {
+            storeSideThread(sessionId, anchor, messages.slice(seedLength));
+        }
         return result;
     };
 
@@ -600,14 +682,15 @@ export async function execute(ctx, invocation) {
         const derived = agent.session.deriveMessages();
         const seed = sanitizeHistory(derived);
         if (startsNewThread) createdBySideChat.delete(sessionId);
-        // The panel's own history is DISPLAY state: it never enters the request.
-        // Merging it used to let an old side thread outrank the fresh conversation,
-        // and after trimming it could smuggle a tool result whose call was gone — the
-        // provider then rejected the whole request. Each question is now answered from
-        // the current main conversation alone.
-        messages = [...seed, questionMessage(question)];
-        traceSeed(sessionId, derived, seed);
-        stream.start(question, true);
+        // The side thread carries within ONE context epoch and is dropped when the
+        // epoch changes: a refreshed context (compaction, clear) is a new conversation
+        // derived from the current one, so pre-refresh side answers must not follow it.
+        anchor = contextAnchor(seed);
+        const side = sanitizeHistory(startsNewThread ? [] : takeSideThread(sessionId, anchor) ?? []);
+        seedLength = seed.length;
+        messages = [...seed, ...side, questionMessage(question)];
+        traceSeed(sessionId, derived, [...seed, ...side]);
+        stream.start(question, side.length === 0);
 
         // Accumulated across rounds: the browser already rendered every round's
         // text, so the settled result must not drop the earlier ones.
