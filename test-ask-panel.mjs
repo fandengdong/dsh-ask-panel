@@ -285,7 +285,7 @@ const HISTORY = [
     console.log('ok 13 max tokens inherited, never invented');
 }
 
-/* 14-16. the mid-step history is trimmed to its tool-call-balanced prefix */
+/* 14-16. gaps in a derived history are repaired, never truncated after the first one */
 {
     const call = (id) => ({ type: 'tool-call', id, name: 'bash', arguments: '{}' });
     const result = (id) => ({ type: 'tool-result', toolCallId: id, content: [] });
@@ -295,16 +295,21 @@ const HISTORY = [
         { role: 'assistant', content: [call('a')] },
         { role: 'user', content: [result('a')] },
     ];
-    // A settled assistant call whose results have not landed yet is dropped.
-    assert.deepEqual(implementation.balancedPrefix([...balanced, { role: 'assistant', content: [call('b')] }]), balanced);
-    // Partially answered calls truncate at the assistant message, not at the last result.
+    // A trailing call whose results have not landed is dropped.
+    assert.deepEqual(implementation.sanitizeHistory([...balanced, { role: 'assistant', content: [call('b')] }]), balanced);
+    // A partially answered assistant call keeps what was answered and loses the rest.
+    // Truncating here — the old behaviour — discarded every later turn, which is how a
+    // compacted session ended up feeding this side channel nothing but its summary.
+    const partial = [...balanced, { role: 'assistant', content: [call('c'), call('d')] }, { role: 'user', content: [result('c')] }];
     assert.deepEqual(
-        implementation.balancedPrefix([...balanced, { role: 'assistant', content: [call('c'), call('d')] }, { role: 'user', content: [result('c')] }]),
-        balanced,
+        implementation.sanitizeHistory(partial),
+        [...balanced, { role: 'assistant', content: [call('c')] }, { role: 'user', content: [result('c')] }],
     );
+    // An orphan result, whose call is gone, goes too.
+    assert.deepEqual(implementation.sanitizeHistory([...balanced, { role: 'user', content: [result('z')] }]), balanced);
     // A fully answered history is untouched.
-    assert.deepEqual(implementation.balancedPrefix([...balanced, { role: 'assistant', content: [call('e')] }, { role: 'user', content: [result('e')] }]).length, 5);
-    console.log('ok 14-16 balanced prefix');
+    assert.equal(implementation.sanitizeHistory([...balanced, { role: 'assistant', content: [call('e')] }, { role: 'user', content: [result('e')] }]).length, 5);
+    console.log('ok 14-16 gaps repaired, never truncated');
 }
 
 /* 17. the exact shape that broke the live run: the built request must not carry the dangling call */
@@ -565,6 +570,25 @@ const HISTORY = [
         assert.match(request.messages.at(-1).content[0].text, /第 \d 问$/);
     }
     console.log('ok 30 the side carry stays bounded');
+}
+
+/* 31. a gap mid-history repairs instead of truncating everything after it */
+{
+    const history = [
+        { role: 'user', content: [{ type: 'text', text: 'go' }] },
+        { role: 'assistant', content: [{ type: 'tool-call', id: 'lost', name: 'bash', arguments: '{}' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'after-the-gap' }] },
+        { role: 'user', content: [{ type: 'text', text: 'latest-ask' }] },
+    ];
+    const it = harness({ header: { config: { provider: 'p', model: 'm' } }, messages: history });
+    await it.captured.registered.handler({ commandId: 'c31', agent: it.agent, rawInput: 'hi', attachments: [], signal: it.signal });
+    const texts = it.captured.requests[0].messages.map((message) =>
+        (message.content ?? []).map((block) => block.text ?? '').join(''));
+    assert.equal(texts.some((text) => text.includes('after-the-gap')), true, 'the turn after a gap was dropped');
+    assert.equal(texts.some((text) => text.includes('latest-ask')), true);
+    // ...and the unanswered call itself is gone, so the provider accepts the request
+    assert.equal(JSON.stringify(it.captured.requests[0].messages).includes('"lost"'), false);
+    console.log('ok 31 a mid-history gap repairs instead of truncating');
 }
 
 console.log('\nall /ask stub checks passed');

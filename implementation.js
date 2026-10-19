@@ -37,7 +37,7 @@
  *
  * @module dsh-ask-panel/implementation
  */
-import { existsSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BlockAssembler, ToolCallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm';
@@ -110,6 +110,26 @@ const TIMEOUT_MS = 300_000;
 
 /** Capability-owned timeout code stamped onto the abort reason. */
 const TIMEOUT_CODE = 'BTW_TIMEOUT';
+
+/** The first text block of a message, shortened for one log line. */
+function snippet(message) {
+    if (message === undefined) return '-';
+    const text = (message.content ?? []).map((block) => (block.type === 'text' ? block.text : `[${block.type}]`)).join('');
+    return `${message.role}:${String(text).replace(/\s+/g, ' ').slice(0, 70)}`;
+}
+
+/** Record what one question was seeded with; diagnostics never break an answer. */
+function traceSeed(sessionId, raw, kept) {
+    try {
+        appendFileSync(
+            new URL('./ask-panel-load.log', import.meta.url),
+            `${new Date().toISOString()} seed ${sessionId} raw=${raw.length} kept=${kept.length}`
+                + ` first=${snippet(kept[0])} last=${snippet(kept.at(-1))}\n`,
+        );
+    } catch {
+        /* a failed diagnostic is not a failed answer */
+    }
+}
 
 /**
  * Tools a side answer may actually run. The full tool list still travels with
@@ -215,32 +235,48 @@ function resolveRoute(ctx, agent) {
 }
 
 /**
- * Trim the agent's history to its longest tool-call-balanced prefix.
+ * Make a derived history safe for the provider without discarding it.
  *
- * The loop appends an assistant message carrying tool calls as soon as that
- * response settles and the matching `tool/result` only once the tool has run,
- * so a history derived mid-step ends on an assistant message whose calls are
- * still unanswered — which providers reject outright. `/ask` is wanted exactly
- * during that window, so the side request must not send it.
+ * The provider rejects a request as a whole when any assistant `tool-call` lacks
+ * its `tool-result`, or any result lacks its call. A history that lost either
+ * half — compaction is the usual way, since the summary replaces the covered
+ * events — therefore used to be "repaired" by truncating at the first gap, which
+ * silently dropped every later turn. That is why a compacted session showed this
+ * side channel only its summary.
  *
- * `balanced` only advances while no call is outstanding, so an assistant
- * message whose results arrive only partially truncates the history at that
- * message rather than at the last result.
+ * Repair the gaps instead: remove the unanswered call blocks, then the orphan
+ * result blocks, then any message the removal emptied. Everything that could be
+ * said is still said.
  *
  * @param messages - the agent's model-visible history.
- * @returns the prefix in which every assistant tool call is paired with its results.
+ * @returns a history the provider will accept.
  */
-export function balancedPrefix(messages) {
-    const pending = new Set();
-    let balanced = 0;
-    for (let index = 0; index < messages.length; index += 1) {
-        for (const block of messages[index].content ?? []) {
-            if (block.type === 'tool-call') pending.add(block.id);
-            else if (block.type === 'tool-result') pending.delete(block.toolCallId);
+export function sanitizeHistory(messages) {
+    const answered = new Set();
+    for (const message of messages) {
+        for (const block of message.content ?? []) {
+            if (block.type === 'tool-result') answered.add(block.toolCallId);
         }
-        if (pending.size === 0) balanced = index + 1;
     }
-    return messages.slice(0, balanced);
+    const called = new Set();
+    for (const message of messages) {
+        for (const block of message.content ?? []) {
+            if (block.type === 'tool-call' && answered.has(block.id)) called.add(block.id);
+        }
+    }
+    const kept = [];
+    for (const message of messages) {
+        const original = message.content ?? [];
+        const blocks = original.filter((block) => {
+            if (block.type === 'tool-call') return answered.has(block.id);
+            if (block.type === 'tool-result') return called.has(block.toolCallId);
+            return true;
+        });
+        if (blocks.length === 0) continue;
+        // Derived messages are shared and deep-frozen: copy rather than mutate.
+        kept.push(blocks.length === original.length ? message : { ...message, content: blocks });
+    }
+    return kept;
 }
 
 /**
@@ -630,7 +666,9 @@ export async function execute(ctx, invocation) {
         // panel is that each question is answered against the context as it is
         // now, not against a snapshot frozen when the panel opened. Only the side
         // turns carry over, which is what keeps a follow-up coherent.
-        const seed = balancedPrefix(agent.session.deriveMessages());
+        const derived = agent.session.deriveMessages();
+        const seed = sanitizeHistory(derived);
+        traceSeed(sessionId, derived, seed);
         if (startsNewThread) createdBySideChat.delete(sessionId);
         const side = startsNewThread ? [] : takeSideThread(sessionId) ?? [];
         seedLength = seed.length;
