@@ -99,6 +99,9 @@ const FRAMING = [
     '- Be economical: a few targeted reads beat many speculative ones. This is a side channel, and',
     '  every round it spends is a round the human waits.',
     '- Follow-up questions may arrive in this same side channel; keep the thread coherent.',
+    '- The main conversation above is the CURRENT state. Earlier turns of this side channel are context',
+    '  only and may describe a state that has since changed: when the two disagree, trust the main',
+    '  conversation. If the difference matters for the answer, say which one you are relying on.',
     '- If you do not know, say so directly and briefly.',
 ].join('\n');
 
@@ -143,11 +146,23 @@ const DELTA_FLUSH_CHARS = 48;
 /** ...or once this long has passed, so a slow stream still types out. */
 const DELTA_FLUSH_MS = 60;
 
-/** A side thread that has sat idle this long is forgotten rather than resumed. */
-const SIDE_TTL_MS = 30 * 60 * 1000;
+/**
+ * A side thread idle this long is forgotten rather than resumed.
+ *
+ * Ten minutes, not thirty: a resumed thread is injected directly in front of the
+ * new question, so an old one does not merely add tokens — it outranks the fresh
+ * main history by adjacency, and the answer echoes a state the conversation has
+ * long left behind.
+ */
+const SIDE_TTL_MS = 10 * 60 * 1000;
 
-/** Messages kept per side thread, so a long side chat cannot grow without bound. */
-const MAX_SIDE_MESSAGES = 40;
+/**
+ * Messages kept per side thread.
+ *
+ * Eight (about four exchanges) is enough for a follow-up to make sense and small
+ * enough that the fresh seed, not yesterday's analysis, stays authoritative.
+ */
+const MAX_SIDE_MESSAGES = 8;
 
 /** `/ask --new <question>` starts a fresh side thread instead of continuing one. */
 const NEW_THREAD_PREFIX = '--new';
@@ -321,7 +336,9 @@ function takeSideThread(sessionId) {
         sideThreads.delete(sessionId);
         return undefined;
     }
-    return thread.messages;
+    // Trim on the way out too: an existing thread may predate a smaller cap, and
+    // the cap must bind on the very next question rather than one answer later.
+    return trimSideThread(thread.messages);
 }
 
 /**

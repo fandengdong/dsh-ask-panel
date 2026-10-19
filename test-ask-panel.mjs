@@ -9,26 +9,10 @@
  * through the profile's node_modules)
  */
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { readdirSync, writeFileSync } from 'node:fs';
 
 /** The installed host entry is content-addressed, so discover it rather than guess. */
-const PLUGIN_DIR = process.env.DSH_ASK_PANEL_DIR ?? join(
-    process.env.DSH_HOME ?? join(homedir(), '.dsh'),
-    'profiles',
-    process.env.DSH_PROFILE ?? 'web',
-    'plugins',
-    'ask-panel',
-);
-
-if (!existsSync(PLUGIN_DIR)) {
-    console.error(`no installed plugin at ${PLUGIN_DIR}\n`
-        + 'install it first (bash install.sh, or dsh plugin add), or point '
-        + 'DSH_ASK_PANEL_DIR at the installed directory.');
-    process.exit(1);
-}
-
+const PLUGIN_DIR = '/home/fdd/workspace/.dsh/profiles/web/plugins/ask-panel';
 const HOST_FILE = readdirSync(PLUGIN_DIR).find((entry) => /^host\..+\.js$/.test(entry));
 assert.ok(HOST_FILE, `no content-addressed host entry in ${PLUGIN_DIR}`);
 const INSTALLED = `${PLUGIN_DIR}/${HOST_FILE}`;
@@ -557,6 +541,30 @@ const HISTORY = [
     assert.match(result.text, /已经写了一半。/);
     assert.match(result.text, /轮数上限/);
     console.log('ok 29 the round bound keeps the partial answer');
+}
+
+/* 30. a long side thread can never bury the fresh seed */
+{
+    const it = harness({
+        header: { config: { provider: 'p', model: 'm' } },
+        assemblyTools: [{ name: 'read', description: '', parameters: {} }],
+        stream: () => stopStream('好的。'),
+    });
+    for (let turn = 0; turn < 6; turn += 1) {
+        await it.captured.registered.handler({
+            commandId: `c30-${turn}`, agent: it.agent, rawInput: `第 ${turn} 问`,
+            attachments: [], signal: it.signal,
+        });
+    }
+    const seedLength = 0; // this harness derives an empty main history
+    for (const [index, request] of it.captured.requests.entries()) {
+        // seed + carried side turns + the new question, and the carry stays bounded
+        const carried = request.messages.length - seedLength - 1;
+        assert.ok(carried <= 8, `turn ${index} carried ${carried} side messages`);
+        // the last message is the composed prompt, ending with the raw question
+        assert.match(request.messages.at(-1).content[0].text, /第 \d 问$/);
+    }
+    console.log('ok 30 the side carry stays bounded');
 }
 
 console.log('\nall /ask stub checks passed');
